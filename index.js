@@ -9,11 +9,11 @@ require('dotenv').config()
 const githubApiKey = process.env.GITHUB_API_KEY
 
 // uncomment to switch to gpt-4o
-// import { openai } from '@ai-sdk/openai'
-// const aiModel = openai('gpt-4o')
+import { openai } from '@ai-sdk/openai'
+const aiModel = openai('gpt-4o')
 
-import { anthropic } from '@ai-sdk/anthropic'
-const aiModel = anthropic('claude-3-5-sonnet-20240620')
+// import { anthropic } from '@ai-sdk/anthropic'
+// const aiModel = anthropic('claude-3-5-sonnet-20240620')
 
 async function getCommit(commitUrl) {
     // Convert normal commit URL to API URL
@@ -172,18 +172,20 @@ async function aiEstimateCodeTime(codeDiff) {
 
 Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
 
-${codeDiff}`
+${codeDiff}
+`
         })
     }
 
-    let tries = 3
+    let tries = 5
 
     while (tries > 0) {
         try {
             let { object } = await call()
+
             return object
         } catch (e) {
-            tries--
+            console.log(`AI error, retrying ${tries--}...`)
         }
     }
 }
