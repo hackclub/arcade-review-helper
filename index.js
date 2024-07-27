@@ -1,3 +1,6 @@
+import readline from 'readline'
+import clipboardy from 'clipboardy'
+
 // load .env
 require('dotenv').config()
 
@@ -13,7 +16,8 @@ const toIgnore = [
     /.jpeg$/,
     /.pyc$/,
     /.ipynb$/,
-    /Pipfile/
+    /Pipfile/,
+    /.csv$/
 ]
 
 async function getCommit(commitUrl) {
@@ -123,72 +127,90 @@ function indent(str, indent = '    ') {
     return str.split('\n').map(line => indent + line).join('\n');
 }
 
-// const repoUrl = 'https://github.com/akshatsinghania/Rock-Paper-Scissor-Game'
-// const scrapbookPost = `
-// I have made a Rock-Paper-Scissor game.This game has three images of hand showing Rock,paper,scissor  .The user competes with the bot and on every click the winner or the match is draw is popped up.
-// git deploy link https://akshatsinghania.github.io/Rock-Paper-Scissor-Game/
-// git repository link https://github.com/akshatsinghania/Rock-Paper-Scissor-Game.git
-// video link
-// https://hackclub.slack.com/archives/C06SBHMQU8G/p1721918035970259?thread_ts=1721914772.514999&cid=C06SBHMQU8G (edi
-// `
+function prompt(rl, query) {
+    return new Promise(resolve => rl.question(query, resolve))
+}
 
-// let repoFiles = await getAllFilesInRepo(repoUrl)
-// let filteredRepoFiles = filterOut(repoFiles.map(r => r.path), toIgnore)
-
-// let readme = repoFiles.find(f => f.path === 'README.md')
-
-// let readmeContents = readme ? readme.fileContent : "No README.md found"
-
-// let isShippedPrompt = `Determine if this project has been shipped:
-
-// 1. Is this project complete?
-// 2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
-
-// PROJECT_DETAILS
-
-// ${indent(scrapbookPost)}
-
-// README.md CONTENTS
-
-// ${indent(readmeContents)}
-
-// FILENAMES IN REPO
-
-// ${filteredRepoFiles.map(f => {
-//     let repoFile = repoFiles.find(r => r.path == f)
-
-//     return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
-// }).join('\n')}
-// `
-
-// console.log(isShippedPrompt)
-
-const commitUrl = 'https://github.com/akshatsinghania/Rock-Paper-Scissor-Game/commit/a1c03f964a4137f27226eb736500186fe9dd0fb4'
-
-let resp = await getCommit(commitUrl)
-
-let filenames = resp.files.map(f => f.filename)
-let filteredFilenames = filterOut(filenames, toIgnore)
-
-let toCheckForAi = filteredFilenames.map(n => {
-    let file = resp.files.find(f => f.filename === n)
-
-    if (file.changes == 0) return
-
-    let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
-
-    return `FILENAME: ${n},
-
-${patchWithoutFirstLine}
-`
+const rl = readline.createInterface({
+    input: process.stdin,
+    output: process.stdout
 })
-.filter(Boolean) // remove null values
-.join('\n')
 
-// console.log(toCheckForAi)
+while (true) {
+    await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
+    const scrapbookPost = clipboardy.readSync()
 
-let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when they used generators like \`rails g\` or \`npm install --save\` and estimate appropriately.
+    const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
+    const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
+    if (extractedRepoUrl) {
+        console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
 
-${toCheckForAi}`
+        let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
+        let filteredRepoFiles = filterOut(repoFiles.map(r => r.path), toIgnore)
 
-console.log(promptForCodeTimeEstimate)
+        let readme = repoFiles.find(f => f.path === 'README.md')
+
+        let readmeContents = readme ? readme.fileContent : "No README.md found"
+
+        let isShippedPrompt = `Determine if this project has been shipped:
+
+1. Is this project complete?
+2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
+
+PROJECT_DETAILS
+
+${indent(scrapbookPost)}
+
+README.md CONTENTS
+
+${indent(readmeContents)}
+
+FILENAMES IN REPO
+
+${filteredRepoFiles.map(f => {
+            let repoFile = repoFiles.find(r => r.path == f)
+
+            return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
+        }).join('\n')}
+`
+
+        console.log(isShippedPrompt)
+        clipboardy.writeSync(isShippedPrompt)
+    } else {
+        console.log('No GitHub repo URL found in the clipboard text.');
+    }
+
+    while (true) {
+        const commitUrl = await prompt(rl, 'Enter the commit URL (write "done" to stop): ')
+        if (commitUrl == 'done') break
+
+        let resp = await getCommit(commitUrl)
+
+        let filenames = resp.files.map(f => f.filename)
+        let filteredFilenames = filterOut(filenames, toIgnore)
+
+        let toCheckForAi = filteredFilenames.map(n => {
+            let file = resp.files.find(f => f.filename === n)
+
+            if (file.changes == 0) return
+
+            let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
+
+            return `FILENAME: ${n},
+
+    ${patchWithoutFirstLine}
+    `
+        })
+            .filter(Boolean) // remove null values
+            .join('\n')
+
+        let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when they used generators like \`rails g\` or \`npm install --save\` and estimate appropriately.
+
+    ${toCheckForAi}`
+
+        console.log(promptForCodeTimeEstimate)
+        clipboardy.writeSync(promptForCodeTimeEstimate)
+    }
+}
+
+rl.close()
