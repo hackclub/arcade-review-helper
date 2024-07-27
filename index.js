@@ -1,24 +1,14 @@
 import readline from 'readline'
 import clipboardy from 'clipboardy'
+import { generateObject } from 'ai'
+import { openai } from '@ai-sdk/openai'
+import z from 'zod'
 
 // load .env
 require('dotenv').config()
 
 const githubApiKey = process.env.GITHUB_API_KEY
-const toIgnore = [
-    /Cargo/,
-    /node_modules/,
-    /package.json/,
-    /bun.lockb/,
-    /LICENSE/,
-    /.png$/,
-    /.jpg$/,
-    /.jpeg$/,
-    /.pyc$/,
-    /.ipynb$/,
-    /Pipfile/,
-    /.csv$/
-]
+const aiModel = openai('gpt-4o')
 
 async function getCommit(commitUrl) {
     // Convert normal commit URL to API URL
@@ -117,12 +107,6 @@ async function getAllFilesInRepo(repoUrl) {
     return await fetchAllFiles();
 }
 
-function filterOut(strings, regexes) {
-    return strings.filter(s => {
-        return !regexes.some(r => r.test(s))
-    })
-}
-
 function indent(str, indent = '    ') {
     return str.split('\n').map(line => indent + line).join('\n');
 }
@@ -131,54 +115,102 @@ function prompt(rl, query) {
     return new Promise(resolve => rl.question(query, resolve))
 }
 
+async function aiDetermineHumanFiles(filenames) {
+    const { object } = await generateObject({
+        model: aiModel,
+        schema: z.object({
+            filenamesForHumanEditedFiles: z.array(z.string()),
+        }),
+        prompt: 'Given a list of filenames in a code project, determine the files that were edited by a human. Things like package.json, build files, any vendored dependencies, and generated code should be excluded. The goal is to determine the files that were written by a human coder. Provide a list of filenames that were edited by a human coder. Filenames: ' + JSON.stringify(filenames)
+    })
+
+    return object.filenamesForHumanEditedFiles
+}
+
+async function aiEstimateCodeTime(codeDiff) {
+    async function call() {
+        return generateObject({
+            model: aiModel,
+            schema: z.object({
+                breakdown: z.array(z.object({
+                    changeTitle: z.string(),
+                    changeDescription: z.string(),
+                    changeFilenames: z.array(z.string()),
+                    percentageOfCodeGenerated: z.number(),
+                    percentageOfCodeWrittenByAi: z.number(),
+                    estimatedMinutes: z.number(),
+                    estimatedMinutesReasoning: z.string(),
+                })),
+                totalEstimatedMinutes: z.number(),
+            }),
+            prompt: `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
+
+Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+
+${codeDiff}`
+        })
+    }
+
+    let tries = 3
+
+    while (tries > 0) {
+        try {
+            let { object } = await call()
+            return object
+        } catch (e) {
+            tries--
+        }
+    }
+}
+
 const rl = readline.createInterface({
     input: process.stdin,
     output: process.stdout
 })
 
 while (true) {
-    await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
-    const scrapbookPost = clipboardy.readSync()
+    //     await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
+    //     const scrapbookPost = clipboardy.readSync()
 
-    const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
-    const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
-    if (extractedRepoUrl) {
-        console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
+    //     const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
+    //     const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
+    //     if (extractedRepoUrl) {
+    //         console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
 
-        let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
-        let filteredRepoFiles = filterOut(repoFiles.map(r => r.path), toIgnore)
+    //         let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
+    //         let filteredRepoFiles = await aiDetermineHumanFiles((repoFiles.map(r => r.path))
 
-        let readme = repoFiles.find(f => f.path === 'README.md')
+    //         let readme = repoFiles.find(f => f.path == 'README.md')
 
-        let readmeContents = readme ? readme.fileContent : "No README.md found"
+    //         let readmeContents = readme ? readme.fileContent : "No README.md found"
 
-        let isShippedPrompt = `Determine if this project has been shipped:
+    //         let isShippedPrompt = `Determine if this project has been shipped:
 
-1. Is this project complete?
-2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
+    // 1. Is this project complete?
+    // 2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
 
-PROJECT_DETAILS
+    // PROJECT_DETAILS
 
-${indent(scrapbookPost)}
+    // ${indent(scrapbookPost)}
 
-README.md CONTENTS
+    // README.md CONTENTS
 
-${indent(readmeContents)}
+    // ${indent(readmeContents)}
 
-FILENAMES IN REPO
+    // FILENAMES IN REPO
 
-${filteredRepoFiles.map(f => {
-            let repoFile = repoFiles.find(r => r.path == f)
+    // ${filteredRepoFiles.map(f => {
+    //             let repoFile = repoFiles.find(r => r.path == f)
 
-            return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
-        }).join('\n')}
-`
+    //             return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
+    //         }).join('\n')}
+    // `
 
-        console.log(isShippedPrompt)
-        clipboardy.writeSync(isShippedPrompt)
-    } else {
-        console.log('No GitHub repo URL found in the clipboard text.');
-    }
+    //         console.log(isShippedPrompt)
+    //         clipboardy.writeSync(isShippedPrompt)
+    //     } else {
+    //         console.log('No GitHub repo URL found in the clipboard text.');
+    //     }
 
     while (true) {
         const commitUrl = await prompt(rl, 'Enter the commit URL (write "done" to stop): ')
@@ -187,7 +219,7 @@ ${filteredRepoFiles.map(f => {
         let resp = await getCommit(commitUrl)
 
         let filenames = resp.files.map(f => f.filename)
-        let filteredFilenames = filterOut(filenames, toIgnore)
+        let filteredFilenames = await aiDetermineHumanFiles(filenames)
 
         let toCheckForAi = filteredFilenames.map(n => {
             let file = resp.files.find(f => f.filename === n)
@@ -204,12 +236,33 @@ ${filteredRepoFiles.map(f => {
             .filter(Boolean) // remove null values
             .join('\n')
 
-        let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when they used generators like \`rails g\` or \`npm install --save\` and estimate appropriately.
+        let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
 
-    ${toCheckForAi}`
+        Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+
+            ${toCheckForAi}`
 
         console.log(promptForCodeTimeEstimate)
         clipboardy.writeSync(promptForCodeTimeEstimate)
+
+        let estimate = await aiEstimateCodeTime(toCheckForAi)
+
+        console.log(`
+
+Features:
+${estimate.breakdown.map(b =>
+            `
+  ${b.estimatedMinutes} minutes: ${b.changeTitle}
+
+    ${b.changeDescription}
+
+    Generated: ${b.percentageOfCodeGenerated}%
+    AI: ${b.percentageOfCodeWrittenByAi}%
+`
+        ).join('')}
+
+Estimate: ${estimate.totalEstimatedMinutes} minutes
+`)
     }
 }
 
