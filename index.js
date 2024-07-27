@@ -8,6 +8,7 @@ require('dotenv').config()
 
 const githubApiKey = process.env.GITHUB_API_KEY
 
+// uncomment to switch to gpt-4o
 // import { openai } from '@ai-sdk/openai'
 // const aiModel = openai('gpt-4o')
 
@@ -131,6 +132,26 @@ async function aiDetermineHumanFiles(filenames) {
     return object.filenamesForHumanEditedFiles
 }
 
+async function aiDetermineIfShipped(projectDetails) {
+    const { object } = await generateObject({
+        model: aiModel,
+        schema: z.object({
+            isShipped: z.boolean(),
+            isShippedReasoning: z.string(),
+        }),
+        prompt: `Determine if this project has been shipped:
+
+1. Does this project look like it's still WIP?
+2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
+
+Be generous with your determination, and if in down return YES.
+
+${projectDetails}`
+    })
+
+    return object
+}
+
 async function aiEstimateCodeTime(codeDiff) {
     async function call() {
         return generateObject({
@@ -187,13 +208,7 @@ while (true) {
         let readme = repoFiles.find(f => f.path == 'README.md')
 
         let readmeContents = readme ? readme.fileContent : "No README.md found"
-
-        let isShippedPrompt = `Determine if this project has been shipped:
-
-1. Is this project complete?
-2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
-
-PROJECT_DETAILS
+        let projectDetails = `PROJECT_DETAILS
 
 ${indent(scrapbookPost)}
 
@@ -210,8 +225,12 @@ ${filteredRepoFiles.map(f => {
     }).join('\n')}
 `
 
-        console.log(isShippedPrompt)
-        clipboardy.writeSync(isShippedPrompt)
+        let result = await aiDetermineIfShipped(projectDetails)
+        console.log(`
+${result.isShippedReasoning}
+
+Is shipped?: ${result.isShipped ? 'YES' : 'NO'}
+`)
     } else {
         console.log('No GitHub repo URL found in the clipboard text.');
     }
@@ -240,18 +259,7 @@ ${filteredRepoFiles.map(f => {
             .filter(Boolean) // remove null values
             .join('\n')
 
-// let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
-
-// Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
-
-//     ${toCheckForAi}`
-
-//         console.log(promptForCodeTimeEstimate)
-//         clipboardy.writeSync(promptForCodeTimeEstimate)
-
         let estimate = await aiEstimateCodeTime(toCheckForAi)
-
-        console.log(estimate)
 
         console.log(`
 
