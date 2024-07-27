@@ -1,14 +1,18 @@
 import readline from 'readline'
 import clipboardy from 'clipboardy'
 import { generateObject } from 'ai'
-import { openai } from '@ai-sdk/openai'
 import z from 'zod'
 
 // load .env
 require('dotenv').config()
 
 const githubApiKey = process.env.GITHUB_API_KEY
-const aiModel = openai('gpt-4o')
+
+// import { openai } from '@ai-sdk/openai'
+// const aiModel = openai('gpt-4o')
+
+import { anthropic } from '@ai-sdk/anthropic'
+const aiModel = anthropic('claude-3-5-sonnet-20240620')
 
 async function getCommit(commitUrl) {
     // Convert normal commit URL to API URL
@@ -169,48 +173,48 @@ const rl = readline.createInterface({
 })
 
 while (true) {
-    //     await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
-    //     const scrapbookPost = clipboardy.readSync()
+    await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
+    const scrapbookPost = clipboardy.readSync()
 
-    //     const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
-    //     const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
-    //     if (extractedRepoUrl) {
-    //         console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
+    const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
+    const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
+    if (extractedRepoUrl) {
+        console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
 
-    //         let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
-    //         let filteredRepoFiles = await aiDetermineHumanFiles((repoFiles.map(r => r.path))
+        let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
+        let filteredRepoFiles = await aiDetermineHumanFiles((repoFiles.map(r => r.path)))
 
-    //         let readme = repoFiles.find(f => f.path == 'README.md')
+        let readme = repoFiles.find(f => f.path == 'README.md')
 
-    //         let readmeContents = readme ? readme.fileContent : "No README.md found"
+        let readmeContents = readme ? readme.fileContent : "No README.md found"
 
-    //         let isShippedPrompt = `Determine if this project has been shipped:
+        let isShippedPrompt = `Determine if this project has been shipped:
 
-    // 1. Is this project complete?
-    // 2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
+1. Is this project complete?
+2. Is this project experienceable by other people, meaning they can follow instructions and run it on their own computer (either in their browser or in their CLI)? If there is a live URL somewhere, then this is almost definitely a yes
 
-    // PROJECT_DETAILS
+PROJECT_DETAILS
 
-    // ${indent(scrapbookPost)}
+${indent(scrapbookPost)}
 
-    // README.md CONTENTS
+README.md CONTENTS
 
-    // ${indent(readmeContents)}
+${indent(readmeContents)}
 
-    // FILENAMES IN REPO
+FILENAMES IN REPO
 
-    // ${filteredRepoFiles.map(f => {
-    //             let repoFile = repoFiles.find(r => r.path == f)
+${filteredRepoFiles.map(f => {
+        let repoFile = repoFiles.find(r => r.path == f)
 
-    //             return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
-    //         }).join('\n')}
-    // `
+        return indent(`${f} (${repoFile.lineCount} lines, ${repoFile.commitCount} commits)`)
+    }).join('\n')}
+`
 
-    //         console.log(isShippedPrompt)
-    //         clipboardy.writeSync(isShippedPrompt)
-    //     } else {
-    //         console.log('No GitHub repo URL found in the clipboard text.');
-    //     }
+        console.log(isShippedPrompt)
+        clipboardy.writeSync(isShippedPrompt)
+    } else {
+        console.log('No GitHub repo URL found in the clipboard text.');
+    }
 
     while (true) {
         const commitUrl = await prompt(rl, 'Enter the commit URL (write "done" to stop): ')
@@ -236,16 +240,18 @@ while (true) {
             .filter(Boolean) // remove null values
             .join('\n')
 
-        let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
+// let promptForCodeTimeEstimate = `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
 
-        Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+// Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
 
-            ${toCheckForAi}`
+//     ${toCheckForAi}`
 
-        console.log(promptForCodeTimeEstimate)
-        clipboardy.writeSync(promptForCodeTimeEstimate)
+//         console.log(promptForCodeTimeEstimate)
+//         clipboardy.writeSync(promptForCodeTimeEstimate)
 
         let estimate = await aiEstimateCodeTime(toCheckForAi)
+
+        console.log(estimate)
 
         console.log(`
 
