@@ -2,9 +2,10 @@ import readline from 'readline'
 import clipboardy from 'clipboardy'
 import { generateObject } from 'ai'
 import z from 'zod'
+import { prompt } from './util.js'
 
 // load .env
-require('dotenv').config()
+import 'dotenv/config'
 
 const githubApiKey = process.env.GITHUB_API_KEY
 
@@ -116,10 +117,6 @@ function indent(str, indent = '    ') {
     return str.split('\n').map(line => indent + line).join('\n');
 }
 
-function prompt(rl, query) {
-    return new Promise(resolve => rl.question(query, resolve))
-}
-
 async function aiDetermineHumanFiles(filenames) {
     const { object } = await generateObject({
         model: aiModel,
@@ -166,11 +163,19 @@ async function aiEstimateCodeTime(codeDiff) {
                     estimatedMinutes: z.number(),
                     estimatedMinutesReasoning: z.string(),
                 })),
+                plagiarismCheckRecommended: z.boolean(),
                 totalEstimatedMinutes: z.number(),
             }),
-            prompt: `A coder submitted the following diffs. Estimate how many minutes it took them to make these changes. You are an expert coder, so you should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot and estimate appropriately.
+            prompt: `
+A coder submitted the following code they claim they wrote to our nonprofit school. Estimate how many minutes it took them to write the code.
 
-Break down the changes made by feature (not by file, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+Be very strict with estimates. Do not round your estimates. Say 2 minutes instead of 5 minutes if it did not take 5 minutes.
+
+Breakdown changes into features implemented / changed (remember, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+
+You should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot. 
+
+Additionally, read through the code and determine if a plagiarism check should be run. Does this look like something a student wrote themselves? Is there any chance it was copied and pasted from somewhere online? It costs us about $3 per plagiarism check, so we only want to do them when they make sense, but we don't want to miss fraud.
 
 ${codeDiff}
 `
@@ -190,29 +195,32 @@ ${codeDiff}
     }
 }
 
-const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout
-})
+export function extractCommitUrls(text) {
+    const commitUrlRegex = /https:\/\/github\.com\/([\w-]+)\/([\w.-]+)\/commit\/([\da-f]+)/g
+    return text.match(commitUrlRegex) || []
+}
 
-while (true) {
-    await prompt(rl, 'Copy the #scrapbook post to the clipboard and hit enter')
-    const scrapbookPost = clipboardy.readSync()
+export function extractRepoUrl(text) {
+    const repoUrlRegex = /https:\/\/github\.com\/([\w-]+)\/([\w.-]+)/
 
-    const repoUrlRegex = /https:\/\/github\.com\/[a-zA-Z0-9_-]+\/[a-zA-Z0-9_-]+/;
-    const extractedRepoUrl = scrapbookPost.match(repoUrlRegex);
-    if (extractedRepoUrl) {
-        console.log('Extracted GitHub repo URL:', extractedRepoUrl[0]);
+    let extractedRepoUrl = text.match(repoUrlRegex)
 
-        let repoFiles = await getAllFilesInRepo(extractedRepoUrl[0])
-        let filteredRepoFiles = await aiDetermineHumanFiles((repoFiles.map(r => r.path)))
+    if (extractedRepoUrl) return extractedRepoUrl[0]
+    return null
+}
 
-        let readme = repoFiles.find(f => f.path == 'README.md')
+export async function determineIfShipped(repoUrl, scrapbookPostText) {
+    console.log("  determineIfShipped: Getting all files in repo")
+    let repoFiles = await getAllFilesInRepo(repoUrl)
+    console.log("  determineIfShipped: Determining which files are written by a human")
+    let filteredRepoFiles = await aiDetermineHumanFiles((repoFiles.map(r => r.path)))
 
-        let readmeContents = readme ? readme.fileContent : "No README.md found"
-        let projectDetails = `PROJECT_DETAILS
+    let readme = repoFiles.find(f => f.path == 'README.md')
 
-${indent(scrapbookPost)}
+    let readmeContents = readme ? readme.fileContent : "No README.md found"
+    let projectDetails = `PROJECT_DETAILS
+
+${indent(scrapbookPostText)}
 
 README.md CONTENTS
 
@@ -227,59 +235,102 @@ ${filteredRepoFiles.map(f => {
     }).join('\n')}
 `
 
-        let result = await aiDetermineIfShipped(projectDetails)
-        console.log(`
-${result.isShippedReasoning}
+    console.log("  determineIfShipped: Send prompt to AI to determine if shipped")
+    return aiDetermineIfShipped(projectDetails)
+}
 
-Is shipped?: ${result.isShipped ? 'YES' : 'NO'}
-`)
-    } else {
-        console.log('No GitHub repo URL found in the clipboard text.');
-    }
+export async function estimateCodeMinutes(commitUrl) {
+    let resp = await getCommit(commitUrl)
 
-    while (true) {
-        const commitUrl = await prompt(rl, 'Enter the commit URL (write "done" to stop): ')
-        if (commitUrl == 'done') break
+    let filenames = resp.files.map(f => f.filename)
+    let filteredFilenames = await aiDetermineHumanFiles(filenames)
 
-        let resp = await getCommit(commitUrl)
+    let toCheckForAi = filteredFilenames.map(n => {
+        let file = resp.files.find(f => f.filename === n)
 
-        let filenames = resp.files.map(f => f.filename)
-        let filteredFilenames = await aiDetermineHumanFiles(filenames)
+        if (file.changes == 0) return
+        if (!file.patch) return
 
-        let toCheckForAi = filteredFilenames.map(n => {
-            let file = resp.files.find(f => f.filename === n)
+        let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
 
-            if (file.changes == 0) return
-
-            let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
-
-            return `FILENAME: ${n},
+        return `FILENAME: ${n},
 
     ${patchWithoutFirstLine}
     `
-        })
-            .filter(Boolean) // remove null values
-            .join('\n')
+    })
+        .filter(Boolean) // remove null values
+        .join('\n')
 
-        let estimate = await aiEstimateCodeTime(toCheckForAi)
+    let estimate = await aiEstimateCodeTime(toCheckForAi)
+    estimate.commitUrl = commitUrl
 
-        console.log(`
-
-Features:
-${estimate.breakdown.map(b =>
-            `
-  ${b.estimatedMinutes} minutes: ${b.changeTitle}
-
-    ${b.changeDescription}
-
-    Generated: ${b.percentageOfCodeGenerated}%
-    AI: ${b.percentageOfCodeWrittenByAi}%
-`
-        ).join('')}
-
-Estimate: ${estimate.totalEstimatedMinutes} minutes
-`)
-    }
+    return estimate
 }
 
-rl.close()
+// async function main() {
+    while (true) {
+//         await prompt('Copy the #scrapbook post to the clipboard and hit enter')
+//         const scrapbookPost = clipboardy.readSync()
+
+//         let repoUrl = extractRepoUrl(scrapbookPost)
+//         if (repoUrl) {
+//             let result = await determineIfShipped(scrapbookPost)
+
+//             console.log(`
+// ${result.isShippedReasoning}
+
+// Is shipped?: ${result.isShipped ? 'YES' : 'NO'}
+// `)
+//         } else {
+//             console.log('No GitHub repo URL found in the clipboard text.');
+//         }
+
+        while (true) {
+            const commitUrl = await prompt('Enter the commit URL (write "done" to stop): ')
+            if (commitUrl == 'done') break
+
+            let resp = await getCommit(commitUrl)
+
+            let filenames = resp.files.map(f => f.filename)
+            let filteredFilenames = await aiDetermineHumanFiles(filenames)
+
+            let toCheckForAi = filteredFilenames.map(n => {
+                let file = resp.files.find(f => f.filename === n)
+
+                if (file.changes == 0) return
+
+                let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
+
+                return `FILENAME: ${n},
+
+    ${patchWithoutFirstLine}
+    `
+            })
+                .filter(Boolean) // remove null values
+                .join('\n')
+
+            let estimate = await aiEstimateCodeTime(toCheckForAi)
+
+            console.log(estimate)
+//             console.log(`
+
+// Features:
+// ${estimate.breakdown.map(b =>
+//                 `
+//   ${b.estimatedMinutes} minutes: ${b.changeTitle}
+
+//     ${b.changeDescription}
+
+//     Generated: ${b.percentageOfCodeGenerated}%
+//     AI: ${b.percentageOfCodeWrittenByAi}%
+// `
+//             ).join('')}
+
+// Estimate: ${estimate.totalEstimatedMinutes} minutes
+// `)
+        }
+    }
+
+    rl.close()
+
+// }
