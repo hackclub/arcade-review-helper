@@ -11,12 +11,13 @@ const githubApiKey = process.env.GITHUB_API_KEY
 
 // uncomment to switch to gpt-4o
 import { openai } from '@ai-sdk/openai'
+// const aiModel = openai('gpt-4o-mini')
 const aiModel = openai('gpt-4o')
 
 // import { anthropic } from '@ai-sdk/anthropic'
 // const aiModel = anthropic('claude-3-5-sonnet-20240620')
 
-async function getCommit(commitUrl) {
+export async function getCommit(commitUrl) {
     // Convert normal commit URL to API URL
     const urlParts = commitUrl.split('/');
     const owner = urlParts[3];
@@ -29,16 +30,12 @@ async function getCommit(commitUrl) {
         'Accept': 'application/vnd.github.v3.json'
     };
 
-    try {
-        const response = await fetch(apiUrl, { headers });
-        if (!response.ok) {
-            throw new Error(`HTTP error! status: ${response.status}`);
-        }
-
-        return response.json()
-    } catch (error) {
-        console.error('Error fetching commit diff:', error);
+    const response = await fetch(apiUrl, { headers });
+    if (!response.ok) {
+        throw new Error(`HTTP error! status: ${response.status}`);
     }
+
+    return response.json()
 }
 
 async function fetchRepoContents(repoUrl, path = '') {
@@ -171,14 +168,14 @@ A coder submitted the following code they claim they wrote to our nonprofit scho
 
 Be very strict with estimates. Do not round your estimates. Say 2 minutes instead of 5 minutes if it did not take 5 minutes.
 
-Breakdown changes into features implemented / changed (remember, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
+Breakdown changes into 1-4 features implemented / changed (remember, features can span multiple files). Have "% of code generated:", "% of code written with AI:", and "Estimated minutes:" for each section - in that order.
 
 You should understand when 1) they used generators like \`rails g\` or \`npm install --save\` 2) they copy code from StackOverflow, and 3) they use GitHub Copilot. 
 
-Additionally, read through the code and determine if a plagiarism check should be run. Does this look like something a student wrote themselves? Is there any chance it was copied and pasted from somewhere online? It costs us about $3 per plagiarism check, so we only want to do them when they make sense, but we don't want to miss fraud.
+Additionally, read through the code and determine if the code might be plagiarized or copied and pasted from somewhere else. Does this look like something a student wrote themselves? Is there any chance it was copied and pasted from somewhere online? It costs us about $3 per plagiarism check, so we only want to do them when they make sense, but we don't want to miss fraud. If the student just ran somethign like \`npx create-next-app@latest\` or \`rails g\`, don't flag them.
 
 ${codeDiff}
-`
+`.substring(0, 150000) // truncate to 150K characters
         })
     }
 
@@ -187,10 +184,13 @@ ${codeDiff}
     while (tries > 0) {
         try {
             let { object } = await call()
+            object.model = aiModel.modelId
+            object.createdAt = new Date().toISOString()
+            console.log(object)
 
             return object
         } catch (e) {
-            console.log(`AI error, retrying ${tries--}...`)
+            console.log(`AI error, retrying ${tries--}...`, e)
         }
     }
 }
@@ -242,14 +242,22 @@ ${filteredRepoFiles.map(f => {
 export async function estimateCodeMinutes(commitUrl) {
     let resp = await getCommit(commitUrl)
 
+    console.log(resp)
     let filenames = resp.files.map(f => f.filename)
     let filteredFilenames = await aiDetermineHumanFiles(filenames)
 
     let toCheckForAi = filteredFilenames.map(n => {
         let file = resp.files.find(f => f.filename === n)
+        if (!file) return
 
-        if (file.changes == 0) return
-        if (!file.patch) return
+        console.log('-------------')
+        console.log(file.changes)
+        console.log('-------------')
+
+        if (file.changes == 0) return null
+        if (!file.patch) return null
+
+        console.log(file)
 
         let patchWithoutFirstLine = file.patch.split('\n').slice(1).join('\n')
 
@@ -257,7 +265,20 @@ export async function estimateCodeMinutes(commitUrl) {
 
     ${patchWithoutFirstLine}
     `
-    })
+    }).filter(Boolean)
+
+        console.log('-------------')
+    console.log(toCheckForAi)
+        console.log('-------------')
+
+    if (!toCheckForAi.length) {
+        return {
+            totalEstimatedMinutes: 0,
+            totalEstimatedMinutesReasoning: 'No files to check'
+        }
+    }
+
+    let prompt = toCheckForAi
         .filter(Boolean) // remove null values
         .join('\n')
 
@@ -267,23 +288,23 @@ export async function estimateCodeMinutes(commitUrl) {
     return estimate
 }
 
-// async function main() {
+async function main() {
     while (true) {
-//         await prompt('Copy the #scrapbook post to the clipboard and hit enter')
-//         const scrapbookPost = clipboardy.readSync()
+        await prompt('Copy the #scrapbook post to the clipboard and hit enter')
+        const scrapbookPost = clipboardy.readSync()
 
-//         let repoUrl = extractRepoUrl(scrapbookPost)
-//         if (repoUrl) {
-//             let result = await determineIfShipped(scrapbookPost)
+        let repoUrl = extractRepoUrl(scrapbookPost)
+        if (repoUrl) {
+            let result = await determineIfShipped(scrapbookPost)
 
-//             console.log(`
-// ${result.isShippedReasoning}
+            console.log(`
+${result.isShippedReasoning}
 
-// Is shipped?: ${result.isShipped ? 'YES' : 'NO'}
-// `)
-//         } else {
-//             console.log('No GitHub repo URL found in the clipboard text.');
-//         }
+Is shipped?: ${result.isShipped ? 'YES' : 'NO'}
+`)
+        } else {
+            console.log('No GitHub repo URL found in the clipboard text.');
+        }
 
         while (true) {
             const commitUrl = await prompt('Enter the commit URL (write "done" to stop): ')
@@ -333,4 +354,4 @@ export async function estimateCodeMinutes(commitUrl) {
 
     rl.close()
 
-// }
+}
